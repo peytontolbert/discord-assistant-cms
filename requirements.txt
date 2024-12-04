@@ -1,0 +1,12 @@
+flask
+python-dotenv
+sounddevice
+soundfile
+numpy
+openai
+selenium
+threading
+deque
+python-dotenv
+whisper 
+yt_dlp

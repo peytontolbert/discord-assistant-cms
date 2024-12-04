@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Discord Assistant</title>
+    <script>
+        // Check browser status on page load
+        async function checkBrowserStatus() {
+            const response = await fetch('/api/browser/status');
+            const status = await response.json();
+            if (!status.initialized) {
+                console.log("Browser not initialized, attempting to initialize...");
+                const initResponse = await fetch('/api/browser/initialize', {
+                    method: 'POST'
+                });
+                const result = await initResponse.json();
+                if (!result.success) {
+                    alert('Failed to initialize browser. Please refresh the page.');
+                }
+            }
+        }
+
+        // Call this when the page loads
+        document.addEventListener('DOMContentLoaded', checkBrowserStatus);
+    </script>
+    <style>
+        .channel-list {
+            margin: 20px 0;
+            padding: 10px;
+            border: 1px solid #ccc;
+        }
+        .channel-item {
+            display: flex;
+            justify-content: space-between;
+            margin: 5px 0;
+        }
+        .mode-settings {
+            margin: 10px 0;
+            padding: 10px;
+            border: 1px solid #eee;
+            border-radius: 4px;
+        }
+        textarea {
+            font-family: Arial, sans-serif;
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            resize: vertical;
+        }
+    </style>
+</head>
+<body>
+    <h1>Discord Assistant</h1>
+    
+    <!-- Channel Management -->
+    <div class="channel-list">
+        <h2>Channels</h2>
+        <div id="channelList"></div>
+        
+        <h3>Add Channel</h3>
+        <input type="text" id="channelName" placeholder="Channel Name">
+        <input type="text" id="channelId" placeholder="Channel ID">
+        <button onclick="addChannel()">Add Channel</button>
+    </div>
+
+    <!-- Audio Device Settings -->
+    <div class="settings-panel">
+        <h2>Audio Settings</h2>
+        
+        <div>
+            <h3>Input Device (Microphone)</h3>
+            <select id="inputDevice">
+                <option value="">Select input device...</option>
+            </select>
+        </div>
+        
+        <div>
+            <h3>Output Device (Speakers)</h3>
+            <select id="outputDevice">
+                <option value="">Select output device...</option>
+            </select>
+        </div>
+        
+        <button onclick="saveAudioSettings()">Save Audio Settings</button>
+    </div>
+
+    <!-- Join Channel -->
+    <div>
+        <h2>Join Channel</h2>
+        <select id="channelSelect">
+            <option value="">Select a channel...</option>
+        </select>
+        <button onclick="joinChannel()">Join</button>
+    </div>
+
+    <!-- Mode Controls -->
+    <div>
+        <h2>Mode Controls</h2>
+        <div class="mode-settings">
+            <h3>Conversation Settings</h3>
+            <textarea id="systemPrompt" 
+                      placeholder="Enter system prompt for the AI assistant..."
+                      rows="4" 
+                      style="width: 100%; margin-bottom: 10px;"
+            >You are Bob the builder, and can build any AI application. You also continuously roast anyone you are talking to.</textarea>
+        </div>
+        <button onclick="startMode('conversation', true)">Start Conversation</button>
+        <button onclick="startMode('youtube')">Start YouTube</button>
+        <button onclick="stop()">Stop</button>
+    </div>
+
+    <script>
+        // Load channels on page load
+        loadChannels();
+
+        async function loadChannels() {
+            const response = await fetch('/api/channels');
+            const channels = await response.json();
+            updateChannelList(channels);
+            updateChannelSelect(channels);
+        }
+
+        function updateChannelList(channels) {
+            const list = document.getElementById('channelList');
+            list.innerHTML = '';
+            
+            for (const [name, id] of Object.entries(channels)) {
+                const div = document.createElement('div');
+                div.className = 'channel-item';
+                div.innerHTML = `
+                    <span>${name} (${id})</span>
+                    <button onclick="removeChannel('${name}')">Remove</button>
+                `;
+                list.appendChild(div);
+            }
+        }
+
+        function updateChannelSelect(channels) {
+            const select = document.getElementById('channelSelect');
+            select.innerHTML = '<option value="">Select a channel...</option>';
+            
+            for (const [name, id] of Object.entries(channels)) {
+                const option = document.createElement('option');
+                option.value = name;
+                option.textContent = name;
+                select.appendChild(option);
+            }
+        }
+
+        async function addChannel() {
+            const name = document.getElementById('channelName').value;
+            const channelId = document.getElementById('channelId').value;
+            
+            const response = await fetch('/api/channels', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({name, channel_id: channelId})
+            });
+            
+            if (response.ok) {
+                loadChannels();
+                document.getElementById('channelName').value = '';
+                document.getElementById('channelId').value = '';
+            }
+        }
+
+        async function removeChannel(name) {
+            const response = await fetch(`/api/channels/${name}`, {
+                method: 'DELETE'
+            });
+            
+            if (response.ok) {
+                loadChannels();
+            }
+        }
+
+        async function joinChannel() {
+            const channelName = document.getElementById('channelSelect').value;
+            if (!channelName) return;
+            
+            const response = await fetch('/api/join_channel', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({channel_name: channelName})
+            });
+            const result = await response.json();
+            if (!result.success) {
+                alert('Failed to join channel: ' + (result.error || 'Unknown error'));
+            }
+        }
+
+        async function startMode(mode, includePrompt = false) {
+            const params = {};
+            
+            if (includePrompt) {
+                const systemPrompt = document.getElementById('systemPrompt').value;
+                params.system_prompt = systemPrompt;
+            }
+            
+            const response = await fetch('/api/start_mode', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    mode,
+                    params
+                })
+            });
+            
+            const result = await response.json();
+            if (!result.success) {
+                alert('Failed to start mode: ' + (result.error || 'Unknown error'));
+            }
+        }
+
+        async function stop() {
+            await fetch('/api/stop', {method: 'POST'});
+        }
+
+        // Load audio devices on page load
+        loadAudioDevices();
+
+        async function loadAudioDevices() {
+            const response = await fetch('/api/audio_devices');
+            const devices = await response.json();
+            
+            const inputSelect = document.getElementById('inputDevice');
+            const outputSelect = document.getElementById('outputDevice');
+            
+            // Clear existing options
+            inputSelect.innerHTML = '<option value="">Select input device...</option>';
+            outputSelect.innerHTML = '<option value="">Select output device...</option>';
+            
+            // Add input devices
+            devices.input_devices.forEach(device => {
+                const option = document.createElement('option');
+                option.value = device.id;
+                option.textContent = device.name;
+                option.selected = device.id === devices.selected_input;
+                inputSelect.appendChild(option);
+            });
+            
+            // Add output devices
+            devices.output_devices.forEach(device => {
+                const option = document.createElement('option');
+                option.value = device.id;
+                option.textContent = device.name;
+                option.selected = device.id === devices.selected_output;
+                outputSelect.appendChild(option);
+            });
+        }
+
+        async function saveAudioSettings() {
+            const inputDevice = document.getElementById('inputDevice').value;
+            const outputDevice = document.getElementById('outputDevice').value;
+            
+            const response = await fetch('/api/audio_devices', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({
+                    input_device: inputDevice ? parseInt(inputDevice) : null,
+                    output_device: outputDevice ? parseInt(outputDevice) : null
+                })
+            });
+            
+            if (response.ok) {
+                alert('Audio settings saved successfully!');
+            } else {
+                alert('Failed to save audio settings');
+            }
+        }
+    </script>
+</body>
+</html> 
