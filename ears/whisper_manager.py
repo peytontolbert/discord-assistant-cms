@@ -8,6 +8,10 @@ import time
 import torch
 import scipy.signal
 import os
+from pathlib import Path
+from datetime import datetime
+# Save audio file
+import soundfile as sf
 
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -40,9 +44,34 @@ class WhisperManager:
             self.min_speech_duration = 0.2
             self.speech_start_time = None
 
+            # Add audio file tracking
+            self.last_audio_file = None
+            self.audio_save_dir = Path("whisper_audio")
+            self.audio_save_dir.mkdir(exist_ok=True)
+            
         except Exception as e:
             logging.error(f"Failed to initialize WhisperManager: {e}")
             raise
+
+    def save_audio_segment(self, audio_array, sample_rate):
+        """Save audio segment to WAV file and return the path"""
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            filename = f"whisper_segment_{timestamp}.wav"
+            filepath = self.audio_save_dir / filename
+            
+            # Ensure audio is float32 and normalized
+            audio_array = audio_array.astype(np.float32)
+            if np.abs(audio_array).max() > 0:
+                audio_array = audio_array / np.abs(audio_array).max()
+            
+            sf.write(str(filepath), audio_array, sample_rate)
+            
+            return str(filepath)
+            
+        except Exception as e:
+            logging.error(f"Error saving audio segment: {e}")
+            return None
 
     def audio_callback(self, outdata, frames, time_info, status):
         if status:
@@ -94,6 +123,11 @@ class WhisperManager:
                         self.buffer = []  # Clear buffer
                         
                         if full_audio.size > 0:
+                            # Save audio segment
+                            audio_file = self.save_audio_segment(full_audio, self.sample_rate)
+                            if audio_file:
+                                self.last_audio_file = audio_file
+                            
                             # Normalize audio
                             if np.abs(full_audio).max() > 0:
                                 full_audio = full_audio / np.abs(full_audio).max()
@@ -267,3 +301,14 @@ class WhisperManager:
             audio_data = self.audio_queue.get()
             return self.transcribe_audio(audio_data)
         return "No speech detected."
+
+    def cleanup(self):
+        """Clean up resources and temporary files"""
+        try:
+            self.stop_listening()
+            # Optionally clean up old audio files
+            # Uncomment if you want to delete old audio files
+            # for file in self.audio_save_dir.glob("*.wav"):
+            #     file.unlink()
+        except Exception as e:
+            logging.error(f"Error during cleanup: {e}")

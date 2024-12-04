@@ -3,6 +3,7 @@ audio/*
 voice_profiles/*
 weights/*
 F5TTS_Base_vocab.txt
+conversation_logs/*
 *.pt
 *.pth
 *.ckpt

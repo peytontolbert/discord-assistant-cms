@@ -458,7 +458,9 @@ def start_mode():
     
     if mode == "conversation":
         params['audio_config'] = audio_config
-        
+        success = assistant.start_mode(mode, **params)
+        return jsonify({"success": success})
+    
     success = assistant.start_mode(mode, **params)
     return jsonify({"success": success})
 
@@ -533,6 +535,15 @@ if __name__ == '__main__':
     # Pass audio_config to ConversationManager and WhisperManager
     assistant = DiscordAssistant(audio_config=audio_config)
     
-    app.run(debug=False, port=5000)
+    try:
+        # Run Flask with threading enabled
+        app.run(debug=False, port=5000, threaded=True, use_reloader=False)
+    except KeyboardInterrupt:
+        print("\nShutting down gracefully...")
+        # Stop any active modes
+        if assistant.current_mode:
+            assistant.stop_current_mode()
+        # Cleanup browser
+        assistant.cleanup_browser()
 
 

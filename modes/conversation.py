@@ -10,6 +10,7 @@ import sounddevice as sd
 import logging
 import scipy.signal
 import os
+from .conversation_logger import ConversationLogger
 
 class ConversationManager:
     def __init__(self, openai_api_key, audio_config=None):
@@ -48,44 +49,78 @@ class ConversationManager:
             'blocksize': self.chunk_size,
             'dtype': self.audio_format
         }
+        
+        self.is_speaking = False
+        self.last_speech_time = 0
+        self.last_speech_duration = 0
+        self.logger = ConversationLogger()
 
     def set_system_prompt(self, prompt):
         """Allow user to set the system prompt for the conversation"""
         self.system_prompt = prompt
+        self.logger.set_system_prompt(prompt)
         print(f"System prompt updated to: {prompt}")
 
     def transcribe_audio_stream(self):
         """Continuously check for and process transcriptions"""
         try:
             while not self.stop_event.is_set():
-                # Get transcription from whisper queue
-                transcription = self.whisper.get_transcription()
-                
-                # Only process if we got a valid transcription
-                if (transcription and 
-                    transcription.strip() and 
-                    transcription not in ["No speech detected.", "Transcription failed."]):
+                try:
+                    # Check if we're currently speaking or recently finished
+                    current_time = time.time()
+                    if hasattr(self, 'is_speaking') and self.is_speaking:
+                        time.sleep(0.1)
+                        continue
                     
-                    logging.info(f"User said: {transcription}")
+                    if hasattr(self, 'last_speech_time') and hasattr(self, 'last_speech_duration'):
+                        time_since_speech = current_time - self.last_speech_time
+                        if time_since_speech < self.last_speech_duration:
+                            time.sleep(0.1)
+                            continue
+
+                    # Get transcription from whisper queue
+                    transcription = self.whisper.get_transcription()
                     
-                    # Add to conversation history
-                    self.conversation_history.append({
-                        "role": "user", 
-                        "content": transcription
-                    })
+                    # Only process if we got a valid transcription and we're not speaking
+                    if (transcription and 
+                        transcription.strip() and 
+                        transcription not in ["No speech detected.", "Transcription failed."] and
+                        not getattr(self, 'is_speaking', False)):
+                        
+                        # Get the audio file path from whisper
+                        user_audio_path = self.whisper.last_audio_file
+                        
+                        logging.info(f"User said: {transcription}")
+                        
+                        # Add to conversation history
+                        self.conversation_history.append({
+                            "role": "user", 
+                            "content": transcription
+                        })
+                        
+                        # Generate and speak response
+                        self.generate_response(transcription)
+                        
+                        # Log the interaction after response is generated
+                        if hasattr(self, 'last_assistant_audio'):
+                            self.logger.log_interaction(
+                                user_audio_path=user_audio_path,
+                                assistant_audio_path=self.last_assistant_audio,
+                                user_text=transcription,
+                                assistant_text=self.conversation_history[-1]["content"],
+                                conversation_history=list(self.conversation_history)
+                            )
                     
-                    # Generate and speak response
-                    self.generate_response(transcription)
-                else:
-                    # Add debug logging for invalid transcriptions
-                    if transcription != "No speech detected.":
-                        logging.debug(f"Skipped transcription: {transcription}")
-                
-                # Small sleep to prevent busy waiting
-                time.sleep(0.1)
+                    time.sleep(0.1)
+                        
+                except Exception as e:
+                    logging.error(f"Error in transcription loop: {e}", exc_info=True)
+                    time.sleep(1)
+                    continue
                     
         except Exception as e:
-            logging.error(f"Transcription stream error: {e}", exc_info=True)
+            logging.error(f"Fatal error in transcription stream: {e}", exc_info=True)
+            self.stop()
 
     def generate_response(self, user_input):
         """Generate and speak assistant response"""
@@ -103,7 +138,7 @@ class ConversationManager:
             speech_thread = threading.Thread(
                 target=self._generate_and_play_speech,
                 args=(response.content,),
-                daemon=True
+                daemon=False
             )
             speech_thread.start()
             
@@ -113,48 +148,29 @@ class ConversationManager:
     def _generate_and_play_speech(self, text):
         """Helper method to generate and play speech to virtual microphone"""
         try:
-            # Generate speech at original quality
-            speech_file = self.speech_manager.synthesize(text)
-            if not speech_file or not os.path.exists(speech_file):
-                logging.error("Failed to generate speech file")
-                return
-
-            # Read the WAV file
-            data, source_rate = sf.read(speech_file)
-            sf.SoundFile(speech_file).close()
+            self.is_speaking = True
             
-            # Convert to float32 and mono if needed
-            data = data.astype(np.float32)
-            if len(data.shape) > 1:
-                data = np.mean(data, axis=1)
-
-            # Normalize audio
-            max_val = np.max(np.abs(data))
-            if max_val > 0:
-                data = data / max_val * 0.7
-
-            try:
-                # Get device's native sample rate
-                device_info = sd.query_devices(self.output_device)
-                target_rate = int(device_info['default_samplerate'])
+            # Generate and play speech
+            speech_file = self.speech_manager.synthesize(text)
+            if speech_file and os.path.exists(speech_file):
+                # Store the speech file path for logging
+                self.last_assistant_audio = speech_file
                 
-                # Resample if needed
-                if source_rate != target_rate:
-                    ratio = target_rate / source_rate
-                    new_length = int(len(data) * ratio)
-                    data = scipy.signal.resample(data, new_length)
+                # Read and play the audio
+                data, samplerate = sf.read(speech_file)
                 
-                # Play to CABLE Input using sounddevice's blocking playback
-                sd.play(data, target_rate, device=self.output_device, blocking=True)
-                # Ensure playback is complete
-                sd.wait()
-                    
-            except Exception as e:
-                logging.error(f"Error sending audio to virtual microphone: {e}")
-                raise
-
+                duration = len(data) / samplerate
+                self.last_speech_time = time.time()
+                self.last_speech_duration = duration + 2.0
+                
+                sd.play(data, samplerate, device=self.output_device, blocking=True)
+                time.sleep(1.0)
+                
+            self.is_speaking = False
+                
         except Exception as e:
-            logging.error(f"Error in speech generation/virtual mic output: {e}")
+            self.is_speaking = False
+            logging.error(f"Error in speech generation/playback: {e}")
 
     def play_audio_file(self, file_path):
         """Play audio file through default output device"""
@@ -185,6 +201,7 @@ class ConversationManager:
     def stop(self):
         """Stop the conversation manager"""
         self.stop_event.set()
+        self.logger.end_session()  # End logging session
         if hasattr(self, 'whisper'):
             self.whisper.stop_listening()
         if hasattr(self, 'speech_manager'):
@@ -193,9 +210,10 @@ class ConversationManager:
     def start(self):
         """Start the conversation manager"""
         self.stop_event.clear()
+        self.logger.start_session()  # Start new logging session
         
         try:
-            # Start the whisper listening stream - using existing audio setup
+            # Start the whisper listening stream
             success = self.whisper.start_listening(
                 sample_rate=self.sample_rate,
                 channels=2  # Match Discord's stereo output
@@ -204,9 +222,10 @@ class ConversationManager:
             if not success:
                 raise RuntimeError("Failed to start Whisper listening stream")
             
-            # Start transcription thread
+            # Create non-daemon thread before starting it
             transcription_thread = threading.Thread(
-                target=self.transcribe_audio_stream
+                target=self.transcribe_audio_stream,
+                daemon=False  # Set daemon status before starting
             )
             transcription_thread.start()
             
