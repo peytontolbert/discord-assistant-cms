@@ -7,12 +7,11 @@ A powerful AI-powered Discord assistant that can join voice channels and interac
 - **Voice Channel Integration**: Seamlessly join Discord voice channels
 - **Multiple Interaction Modes**:
   - Conversation Mode: Natural voice conversations using OpenAI's GPT models
-  - YouTube Mode: Interact with YouTube content
+  - YouTube Mode: Interact with YouTube content (WIP)
   - Audio Playback: Play MP3 files through Discord
 - **Advanced Audio Processing**:
-  - High-quality text-to-speech using F5TTS
+  - text-to-speech using F5TTS with zero-shot voice cloning
   - Real-time speech recognition using Whisper
-  - Echo cancellation and noise suppression
 - **Web Interface**:
   - Manage Discord channels
   - Control interaction modes
